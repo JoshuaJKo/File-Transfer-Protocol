@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+# Joshua Ko
+# CS 3700 Networking
+# This program is a client for file transfer protocol. Tested with Northeastestern FTP server.
+
+import socket
+import argparse
+import os
+
+
+# retrives a file from the FTP server and puts it on the local path.
+def sendFTPtoLocal(controlSocket, dataSocket):
+
+    # secnds a command to get the file from the server.
+    controlSocket.sendall(
+        bytes("RETR " + serverPath + '\r\n', encoding='utf8'))
+    getServerResponse(controlSocket)
+
+    # creates the file in the local directory to be fed information.
+    fileName = localPath[localPath.rfind(
+        '/') + 1: len(localPath)]
+    fileDestination = localPath[0: localPath.rfind('/')]
+
+    completeName = os.path.join(
+        fileDestination, fileName)
+
+    # reads in the information.
+    with open(completeName, 'wb') as file:
+        while True:
+            data = dataSocket.recv(1024)
+            if not data:
+                break
+            file.write(data)
+
+    file.close()
+    dataSocket.close()
+
+# stores a file on the FTP server from the local path.
+
+
+def sendLocaltoFTP(controlSocket, dataSocket):
+
+    # checks to see if the file even exists.
+    if os.path.exists(localPath):
+        # secnds a command to upload a file to the server path inputted by the user.
+        controlSocket.sendall(
+            bytes("STOR " + serverPath + '\r\n', encoding='utf8'))
+        getServerResponse(controlSocket)
+
+        # creates and send the file data.
+        fileSize = os.path.getsize(localPath)
+        f = open(localPath, 'rb')
+        l = f.read(1024)
+        while (l):
+            dataSocket.send(l)
+            l = f.read(1024)
+        f.close()
+
+        dataSocket.shutdown(socket.SHUT_WR)
+        dataSocket.close
+        controlSocket.close
+
+# prepares the sockets to read and send data over the control channel and creates the data channel.
+
+
+def prepareRecvAndSend(controlSocket):
+
+    # asks the server to open a data channel.
+    controlSocket.sendall(bytes("MODE S" + '\r\n', encoding='utf8'))
+    getServerResponse(controlSocket)
+    controlSocket.sendall(bytes("TYPE I" + '\r\n', encoding='utf8'))
+    getServerResponse(controlSocket)
+    controlSocket.sendall(bytes("STRU F" + '\r\n', encoding='utf8'))
+    getServerResponse(controlSocket)
+    controlSocket.sendall(bytes("PASV" + '\r\n', encoding='utf8'))
+
+    # reads in the information to connect to the data channel.
+    data = controlSocket.recv(BUFFER_SIZE)
+    message = data.decode('utf-8')
+
+    # manipulate the recieved numbers to get the IP address
+    toSearch = message[message.find('('): len(message)]
+    toSearch = toSearch.replace(',', '.')
+
+    firstNum = toSearch.split('.')[4]
+
+    secondNum = toSearch.split('.')[5]
+    secondNum = secondNum[0:len(secondNum)-1]
+
+    # convert the last two given numbers to binary and add them to find the port.
+    dataPort = bin(int(firstNum))
+
+    # bit stuff first number by 8 so it creates a 16 bit binary number.
+    dataPort = str(dataPort) + "00000000"
+    dataPort = int(dataPort, 2) + int(secondNum)
+
+    dataAddress = toSearch[1:15]
+
+    dataSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    dataSocket.connect((str(dataAddress), int(dataPort)))
+
+    return(dataSocket)
+
+
+# reads and prints data sent by sockets.
+def getServerResponse(s):
+    data = s.recv(BUFFER_SIZE)
+    message = data.decode('utf-8')
+    print(message)
+
+# logins to the server with the given username and password.
+
+
+def login(s, username, password):
+
+    # if no user name is given, make it anonymous.
+    if username == '':
+        username = 'anonymous'
+
+    s.sendall(bytes("USER " + username + '\r\n', encoding='utf8'))
+    getServerResponse(s)
+
+    # sends the password command if a password is given.
+    if password != '':
+        s.sendall(bytes("PASS " + password + '\r\n', encoding='utf8'))
+        getServerResponse(s)
+
+
+BUFFER_SIZE = 1024
+hostname = 'networks-teaching-ftp.ccs.neu.edu'
+port = 21
+
+# create arguments to create the following command line: './3700ftp operation param1 [param2]'
+parser = argparse.ArgumentParser()
+parser.add_argument('operation')
+parser.add_argument('param1')
+parser.add_argument('param2', default="No Argument", nargs='?')
+
+args = parser.parse_args()
+
+command = args.operation
+param1 = args.param1
+param2 = args.param2
+
+# checks if the first parameter is a url
+if '@' in param1:
+    localToFTP = False
+
+    # breaks apart string to find login, password, and url path information.
+    findColon = param1.find(':', 6, len(param1))
+    username = param1[6: int(findColon)]
+
+    password = param1[int(findColon) + 1: param1.find(
+        '@', int(findColon), len(param1))]
+
+    findCom = param1.find('.com', findColon, len(param1)) + 4
+    serverPath = param1[findCom:len(param1)]
+    localPath = param2
+
+# goes in if the first parameter is a local file directory and the second is a url
+else:
+    localToFTP = True
+
+    # breaks apart string to find login, password, and url path information.
+    findColon = param2.find(':', 6, len(param2))
+    username = param2[6: int(findColon)]
+    password = param2[int(findColon) + 1: param2.find(
+        '@', int(findColon), len(param2))]
+
+    findCom = param2.find('.com', findColon, len(param2)) + 4
+    serverPath = param2[findCom:len(param2)]
+    localPath = param1
+
+
+# connects to the control server.
+controlSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+controlSocket.connect((hostname, int(port)))
+getServerResponse(controlSocket)
+
+login(controlSocket, username, password)
+
+# lists all of the files in the given directory.
+if command == 'ls':
+
+    dataSocket = prepareRecvAndSend(controlSocket)
+    controlSocket.sendall(
+        bytes("LIST " + serverPath + '\r\n', encoding='utf8'))
+    getServerResponse(controlSocket)
+    getServerResponse(dataSocket)
+
+    controlSocket.sendall(bytes("CLOSE \r\n", encoding='utf8'))
+    controlSocket.close()
+
+# makes a new directory in the given file path.
+elif command == 'mkdir':
+    controlSocket.sendall(bytes("MKD " + serverPath + '\r\n', encoding='utf8'))
+    getServerResponse(controlSocket)
+
+    controlSocket.sendall(bytes("CLOSE \r\n", encoding='utf8'))
+    controlSocket.close()
+
+
+# removes the directory given.
+elif command == 'rmdir':
+    controlSocket.sendall(bytes("RMD " + serverPath + '\r\n', encoding='utf8'))
+    getServerResponse(controlSocket)
+
+    controlSocket.sendall(bytes("CLOSE \r\n", encoding='utf8'))
+    controlSocket.close()
+
+# removes the file given.
+elif command == 'rm':
+    dataSocket = prepareRecvAndSend(controlSocket)
+    controlSocket.sendall(
+        bytes("DELE " + serverPath + '\r\n', encoding='utf8'))
+    getServerResponse(controlSocket)
+
+    controlSocket.sendall(bytes("CLOSE \r\n", encoding='utf8'))
+    controlSocket.close()
+
+# copies a file from the FTP server to the local machine or vice versa.
+elif command == 'cp':
+    dataSocket = prepareRecvAndSend(controlSocket)
+
+    if localToFTP:
+        sendLocaltoFTP(controlSocket, dataSocket)
+
+    else:
+        sendFTPtoLocal(controlSocket, dataSocket)
+
+    controlSocket.sendall(bytes("CLOSE \r\n", encoding='utf8'))
+    controlSocket.close()
+
+# moves a file from the FTP server to the local machine or vice versa
+elif command == 'mv':
+    dataSocket = prepareRecvAndSend(controlSocket)
+
+    if localToFTP:
+        sendLocaltoFTP(controlSocket, dataSocket)
+
+        # deletes the original file
+        if os.path.exists(localPath):
+            os.remove(localPath)
+        else:
+            print("File does not exist")
+
+    else:
+        sendFTPtoLocal(controlSocket, dataSocket)
+
+        # deletes the original file
+        controlSocket.sendall(
+            bytes("DELE " + serverPath + '\r\n', encoding='utf8'))
+        getServerResponse(controlSocket)
+
+    controlSocket.sendall(bytes("CLOSE \r\n", encoding='utf8'))
+
+# closes if there is no valid command given.
+else:
+    controlSocket.sendall(bytes("CLOSE \r\n", encoding='utf8'))
+    controlSocket.close
